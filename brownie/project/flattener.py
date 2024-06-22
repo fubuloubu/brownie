@@ -87,7 +87,7 @@ class Flattener:
         # all pragma statements, we already have the license used + know which compiler
         # version is used via the build info
         pragmas = set((match.strip() for src in sources for match in PRAGMA_PATTERN.findall(src)))
-        # now we go thorugh and remove all imports/pragmas/license stuff
+        # now we go through and remove all imports/pragmas/license stuff
         wipe = lambda src: PRAGMA_PATTERN.sub(  # noqa: E731
             "", LICENSE_PATTERN.sub("", IMPORT_PATTERN.sub("", src))
         )
@@ -147,4 +147,11 @@ class Flattener:
         if path.is_absolute():
             return path.as_posix()
 
-        return (Path(source_file_dir) / path).resolve().as_posix()
+        source_file_dir = Path(source_file_dir).resolve()
+        newpath = (source_file_dir / path).resolve()
+        while not newpath.exists():
+            source_file_dir = source_file_dir.parent
+            newpath = (source_file_dir / path).resolve()
+            if source_file_dir == Path("/"):
+                raise FileNotFoundError(f"Cannot determine location of {import_path}")
+        return newpath.as_posix()

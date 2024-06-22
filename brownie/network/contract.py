@@ -88,6 +88,7 @@ _explorer_tokens = {
     "moonscan": "MOONSCAN_TOKEN",
     "gnosisscan": "GNOSISSCAN_TOKEN",
     "base": "BASESCAN_TOKEN",
+    "blast": "BLASTSCAN_TOKEN",
 }
 
 
@@ -997,11 +998,12 @@ class Contract(_DeployedContractBase):
                 raise exc
             abi = json.loads(data_abi["result"].strip())
             name = "UnknownContractName"
-            warnings.warn(
-                f"{address}: Was able to fetch the ABI but not the source code. "
-                "Some functionality will not be available.",
-                BrownieCompilerWarning,
-            )
+            if not silent:
+                warnings.warn(
+                    f"{address}: Was able to fetch the ABI but not the source code. "
+                    "Some functionality will not be available.",
+                    BrownieCompilerWarning,
+                )
 
         if as_proxy_for is None:
             # always check for an EIP1967 proxy - https://eips.ethereum.org/EIPS/eip-1967
@@ -1083,40 +1085,49 @@ class Contract(_DeployedContractBase):
             evm_version = None
 
         source_str = "\n".join(data["result"][0]["SourceCode"].splitlines())
-        if source_str.startswith("{{"):
-            # source was verified using compiler standard JSON
-            input_json = json.loads(source_str[1:-1])
-            sources = {k: v["content"] for k, v in input_json["sources"].items()}
-            evm_version = input_json["settings"].get("evmVersion", evm_version)
-            remappings = input_json["settings"].get("remappings", [])
+        try:
+            if source_str.startswith("{{"):
+                # source was verified using compiler standard JSON
+                input_json = json.loads(source_str[1:-1])
+                sources = {k: v["content"] for k, v in input_json["sources"].items()}
+                evm_version = input_json["settings"].get("evmVersion", evm_version)
+                remappings = input_json["settings"].get("remappings", [])
 
-            compiler.set_solc_version(str(version))
-            input_json.update(
-                compiler.generate_input_json(
-                    sources, optimizer=optimizer, evm_version=evm_version, remappings=remappings
+                compiler.set_solc_version(str(version))
+                input_json.update(
+                    compiler.generate_input_json(
+                        sources, optimizer=optimizer, evm_version=evm_version, remappings=remappings
+                    )
                 )
-            )
-            output_json = compiler.compile_from_input_json(input_json)
-            build_json = compiler.generate_build_json(input_json, output_json)
-        else:
-            if source_str.startswith("{"):
-                # source was submitted as multiple files
-                sources = {k: v["content"] for k, v in json.loads(source_str).items()}
+                output_json = compiler.compile_from_input_json(input_json)
+                build_json = compiler.generate_build_json(input_json, output_json)
             else:
-                # source was submitted as a single file
-                if compiler_str.startswith("vyper"):
-                    path_str = f"{name}.vy"
+                if source_str.startswith("{"):
+                    # source was submitted as multiple files
+                    sources = {k: v["content"] for k, v in json.loads(source_str).items()}
                 else:
-                    path_str = f"{name}-flattened.sol"
-                sources = {path_str: source_str}
+                    # source was submitted as a single file
+                    if compiler_str.startswith("vyper"):
+                        path_str = f"{name}.vy"
+                    else:
+                        path_str = f"{name}-flattened.sol"
+                    sources = {path_str: source_str}
 
-            build_json = compiler.compile_and_format(
-                sources,
-                solc_version=str(version),
-                vyper_version=str(version),
-                optimizer=optimizer,
-                evm_version=evm_version,
-            )
+                build_json = compiler.compile_and_format(
+                    sources,
+                    solc_version=str(version),
+                    vyper_version=str(version),
+                    optimizer=optimizer,
+                    evm_version=evm_version,
+                )
+        except Exception as e:
+            if not silent:
+                warnings.warn(
+                    f"{address}: Compilation failed due to {type(e).__name__}. Falling back to ABI,"
+                    " some functionality will not be available.",
+                    BrownieCompilerWarning,
+                )
+            return cls.from_abi(name, address, abi, owner)
 
         build_json = build_json[name]
         if as_proxy_for is not None:
@@ -1125,10 +1136,11 @@ class Contract(_DeployedContractBase):
         if not _verify_deployed_code(
             address, build_json["deployedBytecode"], build_json["language"]
         ):
-            warnings.warn(
-                f"{address}: Locally compiled and on-chain bytecode do not match!",
-                BrownieCompilerWarning,
-            )
+            if not silent:
+                warnings.warn(
+                    f"{address}: Locally compiled and on-chain bytecode do not match!",
+                    BrownieCompilerWarning,
+                )
             del build_json["pcMap"]
 
         self = cls.__new__(cls)
@@ -1246,7 +1258,7 @@ class ContractEvents(_ContractEvents):
     ) -> None:
         """
         Subscribe to event with a name matching 'event_name', calling the 'callback'
-        function on new occurence giving as parameter the event log receipt.
+        function on new occurrence giving as parameter the event log receipt.
 
         Args:
             event_name (str): Name of the event to subscribe to.
@@ -1273,10 +1285,10 @@ class ContractEvents(_ContractEvents):
 
         Returns:
             if 'event_type' is specified:
-                [list]: List of events of type 'event_type' that occured between
+                [list]: List of events of type 'event_type' that occurred between
                 'from_block' and 'to_block'.
             else:
-                event_logbook [dict]: Dictionnary of events of the contract that occured
+                event_logbook [dict]: Dictionary of events of the contract that occurred
                 between 'from_block' and 'to_block'.
         """
         if to_block is None or to_block > web3.eth.block_number:
@@ -1303,7 +1315,7 @@ class ContractEvents(_ContractEvents):
         'event_name' occurs. If timeout is superior to zero and no event matching
         'event_name' has occured, the Coroutine ends when the timeout is reached.
 
-        The Coroutine return value is an AttributeDict filled with the following fileds :
+        The Coroutine return value is an AttributeDict filled with the following fields :
             - 'event_data' (AttributeDict): The event log receipt that was caught.
             - 'timed_out' (bool): False if the event did not timeout, else True
 

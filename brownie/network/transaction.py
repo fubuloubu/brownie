@@ -216,10 +216,12 @@ class TransactionReceipt:
         # await confirmation of tx in a separate thread which is blocking if
         # required_confs > 0 or tx has already confirmed (`blockNumber` != None)
         confirm_thread = threading.Thread(
-            target=self._await_confirmation, args=(tx["blockNumber"], required_confs), daemon=True
+            target=self._await_confirmation,
+            args=(tx.get("blockNumber"), required_confs),
+            daemon=True,
         )
         confirm_thread.start()
-        if is_blocking and (required_confs > 0 or tx["blockNumber"]):
+        if is_blocking and (required_confs > 0 or tx.get("blockNumber")):
             confirm_thread.join()
 
     def __repr__(self) -> str:
@@ -403,17 +405,22 @@ class TransactionReceipt:
             print(f"This transaction already has {self.confirmations} confirmations.")
             return
 
+        if self.nonce is not None:
+            # if we know the transaction nonce, it's more efficient to watch the tx count
+            # this (i hope) also fixes a longstanding bug that sometimes gave an incorrect
+            # "tx dropped without known replacement" error due to a race condition
+            while web3.eth.get_transaction_count(str(self.sender)) <= self.nonce:
+                time.sleep(1)
+
         while True:
             try:
                 tx: Dict = web3.eth.get_transaction(self.txid)
                 break
             except TransactionNotFound:
                 if self.nonce is not None:
-                    sender_nonce = web3.eth.get_transaction_count(str(self.sender))
-                    if sender_nonce > self.nonce:
-                        self.status = Status(-2)
-                        self._confirmed.set()
-                        return
+                    self.status = Status(-2)
+                    self._confirmed.set()
+                    return
                 time.sleep(1)
 
         self._await_confirmation(tx["blockNumber"], required_confs)
@@ -508,7 +515,7 @@ class TransactionReceipt:
                 # check if tx is still in mempool, this will raise otherwise
                 tx = web3.eth.get_transaction(self.txid)
                 self.block_number = None
-                return self._await_confirmation(tx["blockNumber"], required_confs)
+                return self._await_confirmation(tx.get("blockNumber"), required_confs)
             if required_confs - self.confirmations != remaining_confs:
                 remaining_confs = required_confs - self.confirmations
                 if not self._silent:
